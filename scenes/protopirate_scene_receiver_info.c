@@ -12,6 +12,12 @@ static void protopirate_scene_receiver_info_widget_callback(
     InputType type,
     void* context);
 
+static void psa_bf_done_cb_receiver_info(void* context) {
+    ProtoPirateApp* app = context;
+    view_dispatcher_send_custom_event(
+        app->view_dispatcher, ProtoPirateCustomEventPsaBruteforceComplete);
+}
+
 static bool psa_item_needs_bruteforce(ProtoPirateApp* app) {
     FlipperFormat* ff =
         protopirate_history_get_raw_data(app->txrx->history, app->txrx->idx_menu_chosen);
@@ -42,10 +48,11 @@ static void protopirate_receiver_info_show_bf_progress(ProtoPirateApp* app) {
     PsaBfState* s = app->psa_bf_state;
     uint32_t cur = s->progress_current;
     uint32_t total = s->progress_total;
-    uint8_t pct = total ? (uint8_t)((uint32_t)((uint64_t)cur * 100 / total)) : 0;
-    if(pct > 100) pct = 100;
+    uint32_t pct_tenths = total ? (uint32_t)((uint64_t)cur * 1000 / total) : 0;
+    if(pct_tenths > 1000) pct_tenths = 1000;
 
-    FuriString* pct_str = furi_string_alloc_printf("%u%%", pct);
+    FuriString* pct_str =
+        furi_string_alloc_printf("%lu.%u%%", pct_tenths / 10, (unsigned)(pct_tenths % 10));
     widget_add_string_element(
         app->widget, 62, 12, AlignLeft, AlignTop, FontSecondary, furi_string_get_cstr(pct_str));
     furi_string_free(pct_str);
@@ -58,18 +65,21 @@ static void protopirate_receiver_info_show_bf_progress(ProtoPirateApp* app) {
         PSA_BF_PROGRESS_BAR_H,
         2,
         false);
-    if(pct > 0) {
-        uint8_t fill_w = (PSA_BF_PROGRESS_BAR_W * (uint32_t)pct) / 100;
-        if(fill_w < 2) fill_w = 2;
-        widget_add_rect_element(
-            app->widget,
-            PSA_BF_PROGRESS_BAR_X + 1,
-            PSA_BF_PROGRESS_BAR_Y + 1,
-            fill_w - 1,
-            PSA_BF_PROGRESS_BAR_H - 2,
-            1,
-            true);
-    }
+    static uint16_t bf_ri_frame = 0;
+    bf_ri_frame++;
+    uint8_t inner_w = PSA_BF_PROGRESS_BAR_W - 4;
+    uint8_t block_w = 16;
+    uint8_t travel = inner_w - block_w;
+    uint16_t phase = (bf_ri_frame * 2) % (uint16_t)(2 * travel);
+    uint8_t block_x = (phase <= travel) ? (uint8_t)phase : (uint8_t)(2 * travel - phase);
+    widget_add_rect_element(
+        app->widget,
+        PSA_BF_PROGRESS_BAR_X + 2 + block_x,
+        PSA_BF_PROGRESS_BAR_Y + 2,
+        block_w,
+        PSA_BF_PROGRESS_BAR_H - 4,
+        0,
+        true);
 }
 
 static void protopirate_receiver_info_build_normal_widget(ProtoPirateApp* app) {
@@ -326,7 +336,8 @@ bool protopirate_scene_receiver_info_on_event(void* context, SceneManagerEvent e
 
     if(event.type == SceneManagerEventTypeTick) {
         if(app->psa_bf_thread && app->psa_bf_state) {
-            if(app->psa_bf_state->status == PSA_BF_STATUS_RUNNING) {
+            uint8_t bfst = app->psa_bf_state->status;
+            if(bfst == PSA_BF_STATUS_IDLE || bfst == PSA_BF_STATUS_RUNNING) {
                 protopirate_receiver_info_show_bf_progress(app);
                 consumed = true;
             } else {
@@ -338,6 +349,14 @@ bool protopirate_scene_receiver_info_on_event(void* context, SceneManagerEvent e
     }
 
     if(event.type == SceneManagerEventTypeCustom) {
+        if(event.event == ProtoPirateCustomEventPsaBruteforceComplete) {
+            if(app->psa_bf_state) {
+                psa_bf_finish_and_show_result(app);
+            }
+            consumed = true;
+            return consumed;
+        }
+
         if(event.event == ProtoPirateCustomEventReceiverInfoBruteforceStart) {
             FlipperFormat* ff =
                 protopirate_history_get_raw_data(app->txrx->history, app->txrx->idx_menu_chosen);
@@ -357,6 +376,8 @@ bool protopirate_scene_receiver_info_on_event(void* context, SceneManagerEvent e
                 consumed = true;
                 return consumed;
             }
+            state->on_done = psa_bf_done_cb_receiver_info;
+            state->on_done_ctx = app;
             app->psa_bf_state = state;
             app->psa_bf_thread = furi_thread_alloc_ex(
                 "PsaBf", 2048, psa_brute_force_thread_entry, state);

@@ -37,6 +37,8 @@ typedef enum {
     // Sub decode
     ProtoPirateCustomEventSubDecodeUpdate,
     ProtoPirateCustomEventSubDecodeSave,
+    ProtoPirateCustomEventSubDecodeBruteforceStart,
+    ProtoPirateCustomEventPsaBruteforceComplete,
     // File Browser
     ProtoPirateCustomEventSavedFileSelected,
 } ProtoPirateCustomEvent;
